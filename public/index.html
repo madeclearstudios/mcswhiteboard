@@ -3,12 +3,22 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Whiteboard</title>
+  <title>Made Clear Studios – User Journey Builder</title>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Whiteboard</div>
+    <div class="brand">
+      <img class="logo" src="assets/mcs-logo-black.png" alt="Made Clear Studios" width="96" height="32">
+      <span class="app-name">User Journey Builder</span>
+    </div>
+    <div class="group board-meta">
+      <span id="boardTitle" class="board-title"></span>
+      <span id="saveStatus" class="muted save-status"></span>
+      <select id="boardSelect" class="board-select" aria-label="Open board"></select>
+    </div>
     <div class="group">
       <button id="undo" title="Undo (Ctrl+Z)">↶</button>
       <button id="redo" title="Redo (Ctrl+Shift+Z)">↷</button>
@@ -24,14 +34,22 @@
       <span id="sizeLabel" class="muted"></span>
     </div>
     <div class="group right">
-      <button id="export" title="Download board as JSON">Export</button>
-      <button id="import" title="Load a board JSON file">Import</button>
-      <button id="clear" title="Clear the board">Clear</button>
+      <button id="export" title="Download this board as a JSON file">Export</button>
+      <button id="import" title="Load a board JSON file as a new board">Import</button>
+      <button id="clear" title="Clear this board">Clear</button>
+      <a id="logout" class="link" href="/__auth/logout" hidden>Log out</a>
       <input id="file" type="file" accept="application/json,.json" hidden>
     </div>
   </header>
 
   <aside class="palette" id="palette">
+    <section class="boards">
+      <div class="sec-head">
+        <h2>Boards</h2>
+        <button id="newBoard" class="small" title="Create a new board">+ New</button>
+      </div>
+      <ul id="boardList" class="board-list"></ul>
+    </section>
     <section>
       <h2>Shapes</h2>
       <p class="hint">Drag onto the board, or click to add.</p>
@@ -60,6 +78,7 @@
         <li>Double-click or start typing to add text</li>
         <li>Drag a blue dot onto another shape to connect</li>
         <li>Drag the corners to resize</li>
+        <li>Shapes snap to each other and the grid. Hold Alt to place freely</li>
         <li>Drag the background to pan</li>
         <li>Ctrl/⌘ + scroll to zoom</li>
         <li>Delete removes the selection</li>

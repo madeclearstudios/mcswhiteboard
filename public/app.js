@@ -19,8 +19,15 @@
   const START_CANVAS = { w: 3000, h: 2000 };
   const MAX_CANVAS_W = 200000;   // 3000 × 2^6 = 192 000 is the largest step
   const MIN_SIZE = 24;
+  const GRID = 12;            // dots on the board sit on this grid
+  const SNAP_PX = 7;          // alignment snap distance in screen pixels
+  const GUIDE = '#FF2DA0';
   const FONT = 16;
-  const STORE_KEY = 'whiteboard.v1';
+  const LEGACY_KEY = 'whiteboard.v1';     // single board saved by the first version
+  const LOCAL_INDEX = 'ujb.boards';
+  const LOCAL_PREFIX = 'ujb.board.';
+  const LAST_KEY = 'ujb.lastBoard';
+  const SAVE_DELAY = 700;
 
   // ---------- DOM ----------
   const $ = (id) => document.getElementById(id);
@@ -28,7 +35,7 @@
   const scroller = $('scroller'), stage = $('stage'), editor = $('editor');
 
   // ---------- State ----------
-  let state = load() || blank();
+  let state = blank();
   let zoom = 1;
   let selected = null;           // { kind: 'shape' | 'conn', id }
   let currentColor = COLORS[1].v;
@@ -49,12 +56,6 @@
       Array.isArray(d.shapes) && Array.isArray(d.connectors) &&
       d.shapes.every((s) => s && s.id && TYPES.includes(s.type) && [s.x, s.y, s.w, s.h].every(Number.isFinite));
   }
-  function load() {
-    try {
-      const d = JSON.parse(localStorage.getItem(STORE_KEY));
-      return valid(d) ? normalise(d) : null;
-    } catch { return null; }
-  }
   function normalise(d) {
     const ids = new Set(d.shapes.map((s) => s.id));
     return {
@@ -65,7 +66,6 @@
         .map((c) => ({ id: String(c.id || uid()), from: c.from, to: c.to })),
     };
   }
-  function save(json) { try { localStorage.setItem(STORE_KEY, json); } catch { /* storage unavailable */ } }
 
   // ---------- History ----------
   function commit() {
@@ -75,14 +75,14 @@
     history.push(json);
     if (history.length > 200) history.shift();
     hIndex = history.length - 1;
-    save(json);
+    scheduleSave();
     updateButtons();
   }
   function restore(i) {
     hIndex = i;
     state = JSON.parse(history[i]);
     if (selected && !(selected.kind === 'shape' ? getShape(selected.id) : state.connectors.some((c) => c.id === selected.id))) selected = null;
-    save(history[i]);
+    scheduleSave();
     render();
   }
   const undo = () => { if (hIndex > 0) restore(hIndex - 1); };
@@ -96,6 +96,54 @@
     if (s.type === 'triangle') return { x: s.x + s.w * 0.22, y: s.y + s.h * 0.42, w: s.w * 0.56, h: s.h * 0.52 };
     const p = s.type === 'circle' ? Math.min(s.w, s.h) * 0.15 : 8;
     return { x: s.x + p, y: s.y + p, w: Math.max(0, s.w - 2 * p), h: Math.max(0, s.h - 2 * p) };
+  }
+
+  // ---------- Snapping ----------
+  const snapGrid = (v) => Math.round(v / GRID) * GRID;
+  const xLines = (o) => [o.x, o.x + o.w / 2, o.x + o.w];
+  const yLines = (o) => [o.y, o.y + o.h / 2, o.y + o.h];
+
+  // Closest alignment between any of `own` positions and the other shapes' lines on one axis.
+  function bestAlign(own, others, linesOf, T) {
+    let best = null;
+    for (const o of others) {
+      for (const t of linesOf(o)) {
+        for (const v of own) {
+          const d = t - v;
+          if (Math.abs(d) <= T && (!best || Math.abs(d) < Math.abs(best.d))) best = { d, v: t };
+        }
+      }
+    }
+    return best;
+  }
+
+  // Guide line through `v` spanning every shape that has an edge or centre on it.
+  function guideFor(axis, v, shapes) {
+    const on = shapes.filter((o) => (axis === 'x' ? xLines(o) : yLines(o)).some((t) => Math.abs(t - v) < 0.5));
+    if (on.length < 2) return null;
+    const lo = Math.min(...on.map((o) => (axis === 'x' ? o.y : o.x)));
+    const hi = Math.max(...on.map((o) => (axis === 'x' ? o.y + o.h : o.x + o.w)));
+    return { axis, v, lo: lo - 12, hi: hi + 12 };
+  }
+
+  function guidesFor(s, ax, ay) {
+    const all = state.shapes;
+    return [ax && guideFor('x', ax.v, all), ay && guideFor('y', ay.v, all)].filter(Boolean);
+  }
+
+  // Snap a proposed top-left position: align to other shapes first, otherwise to the grid.
+  function snapPosition(s, x, y, T) {
+    const others = state.shapes.filter((o) => o.id !== s.id);
+    const ax = bestAlign([x, x + s.w / 2, x + s.w], others, xLines, T);
+    const ay = bestAlign([y, y + s.h / 2, y + s.h], others, yLines, T);
+    return { x: ax ? x + ax.d : snapGrid(x), y: ay ? y + ay.d : snapGrid(y), ax, ay };
+  }
+
+  // Snap a moving edge coordinate on one axis.
+  function snapEdge(id, v, axis, T) {
+    const others = state.shapes.filter((o) => o.id !== id);
+    const a = bestAlign([v], others, axis === 'x' ? xLines : yLines, T);
+    return a ? { v: v + a.d, a } : { v: snapGrid(v), a: null };
   }
 
   // Point where a ray from the shape's centre towards `to` leaves the shape outline.
@@ -191,6 +239,13 @@
         }
       }
     }
+    if (drag && drag.guides) {
+      for (const g of drag.guides) {
+        out += g.axis === 'x'
+          ? `<line x1="${g.v}" y1="${g.lo}" x2="${g.v}" y2="${g.hi}" stroke="${GUIDE}" stroke-width="${1 * k}" pointer-events="none"/>`
+          : `<line x1="${g.lo}" y1="${g.v}" x2="${g.hi}" y2="${g.v}" stroke="${GUIDE}" stroke-width="${1 * k}" pointer-events="none"/>`;
+      }
+    }
     if (drag && drag.mode === 'connect') {
       const from = getShape(drag.from), target = drag.over ? getShape(drag.over) : null;
       if (from) {
@@ -249,13 +304,15 @@
   // ---------- Selection & edits ----------
   function select(sel) { selected = sel; }
 
-  function addShape(type, p) {
+  function addShape(type, p, snap = true) {
     const [w, h] = DEFAULT_SIZE[type];
-    const s = {
-      id: uid(), type, w, h, color: currentColor, text: '',
-      x: clamp(p.x - w / 2, 0, state.canvas.w - w),
-      y: clamp(p.y - h / 2, 0, state.canvas.h - h),
-    };
+    const s = { id: uid(), type, w, h, color: currentColor, text: '', x: p.x - w / 2, y: p.y - h / 2 };
+    if (snap) {
+      const sp = snapPosition(s, s.x, s.y, (SNAP_PX * 2) / zoom);   // a little more generous on drop
+      s.x = sp.x; s.y = sp.y;
+    }
+    s.x = clamp(s.x, 0, state.canvas.w - w);
+    s.y = clamp(s.y, 0, state.canvas.h - h);
     state.shapes.push(s);
     select({ kind: 'shape', id: s.id });
     render();
@@ -379,8 +436,16 @@
     }
     if (drag.mode === 'move') {
       const s = getShape(drag.id);
-      s.x = clamp(p.x - drag.dx, 0, W - s.w);
-      s.y = clamp(p.y - drag.dy, 0, H - s.h);
+      let x = p.x - drag.dx, y = p.y - drag.dy;
+      drag.guides = null;
+      if (!e.altKey) {
+        const sp = snapPosition(s, x, y, SNAP_PX / zoom);
+        x = sp.x; y = sp.y;
+        s.x = clamp(x, 0, W - s.w); s.y = clamp(y, 0, H - s.h);
+        drag.guides = guidesFor(s, sp.ax, sp.ay);
+      } else {
+        s.x = clamp(x, 0, W - s.w); s.y = clamp(y, 0, H - s.h);
+      }
       drag.moved = true;
     } else if (drag.mode === 'resize') {
       const o = drag.orig, c = drag.corner, s = getShape(drag.id);
@@ -388,11 +453,34 @@
       const fx = west ? o.x + o.w : o.x, fy = north ? o.y + o.h : o.y;   // fixed opposite corner
       let nw = Math.max(MIN_SIZE, west ? fx - p.x : p.x - fx);
       let nh = Math.max(MIN_SIZE, north ? fy - p.y : p.y - fy);
+      drag.guides = null;
+      if (!e.altKey) {
+        const T = SNAP_PX / zoom;
+        const edgeX = (w) => (west ? fx - w : fx + w), edgeY = (h) => (north ? fy - h : fy + h);
+        if (LOCK_ASPECT[o.type]) {
+          // One size drives both sides: use whichever edge aligns more closely.
+          const m = Math.max(nw, nh);
+          const sx = snapEdge(o.id, edgeX(m), 'x', T), sy = snapEdge(o.id, edgeY(m), 'y', T);
+          const dx = sx.a ? Math.abs(sx.v - edgeX(m)) : Infinity, dy = sy.a ? Math.abs(sy.v - edgeY(m)) : Infinity;
+          const pick = dx <= dy ? (sx.a ? sx : null) : sy;
+          const m2 = pick ? Math.abs((pick === sx ? fx : fy) - pick.v) : snapGrid(m);
+          nw = nh = Math.max(MIN_SIZE, m2);
+        } else {
+          nw = Math.max(MIN_SIZE, Math.abs(snapEdge(o.id, edgeX(nw), 'x', T).v - fx));
+          nh = Math.max(MIN_SIZE, Math.abs(snapEdge(o.id, edgeY(nh), 'y', T).v - fy));
+        }
+      }
       if (LOCK_ASPECT[o.type]) nw = nh = Math.max(nw, nh);
       nw = Math.min(nw, west ? fx : W - fx);
       nh = Math.min(nh, north ? fy : H - fy);
       if (LOCK_ASPECT[o.type]) nw = nh = Math.min(nw, nh);
       Object.assign(s, { w: nw, h: nh, x: west ? fx - nw : fx, y: north ? fy - nh : fy });
+      if (!e.altKey) {
+        const others = state.shapes.filter((q) => q.id !== s.id);
+        const ax = bestAlign([west ? s.x : s.x + s.w], others, xLines, 0.5);
+        const ay = bestAlign([north ? s.y : s.y + s.h], others, yLines, 0.5);
+        drag.guides = guidesFor(s, ax, ay);
+      }
     } else if (drag.mode === 'connect') {
       drag.p = p;
       const id = shapeIdAt(e.clientX, e.clientY);
@@ -508,7 +596,8 @@
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `board-${new Date().toISOString().slice(0, 10)}.json`;
+    const slug = currentName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'board';
+    a.download = `${slug}-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   };
@@ -519,18 +608,16 @@
     if (!f) return;
     try {
       const d = JSON.parse(await f.text());
-      if (!valid(d)) throw new Error('bad file');
-      state = normalise(d);
-      selected = null;
-      render();
-      commit();
+      const data = valid(d) ? d : (d && valid(d.data) ? d.data : null);   // plain board or exported wrapper
+      if (!data) throw new Error('bad file');
+      await createBoard(f.name.replace(/\.json$/i, '').slice(0, 80) || 'Imported board', normalise(data));
       $('fit').onclick();
     } catch {
-      alert('That file is not a valid board.');
+      alert('That file could not be imported as a board.');
     }
   };
   $('clear').onclick = () => {
-    if (!state.shapes.length || confirm('Clear the whole board? You can undo this.')) {
+    if (!state.shapes.length || confirm(`Clear everything on "${currentName}"? You can undo this.`)) {
       state = blank();
       selected = null;
       render();
@@ -546,6 +633,7 @@
     const key = e.key.toLowerCase();
     if (mod && key === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
     if (mod && key === 'y') { e.preventDefault(); redo(); return; }
+    if (mod && key === 's') { e.preventDefault(); saveNow(); return; }
     if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelected(); return; }
     if (e.key === 'Escape') { selected = null; render(); return; }
     if (e.key === ' ' && !selected) { spaceDown = true; e.preventDefault(); return; }
@@ -577,6 +665,262 @@
     const c = viewCenterClient();
     scrollTo(p, c.x, c.y);
   }
-  render();
-  centreView();
+
+  // ---------- Boards: storage ----------
+  const readJSON = (k) => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
+  const writeJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } };
+  const boardId = () => uid() + uid();
+
+  // Used when the site runs without the Netlify API (opening index.html locally).
+  const localStore = {
+    shared: false,
+    async list() { return (readJSON(LOCAL_INDEX) || []).sort((a, b) => b.updatedAt - a.updatedAt); },
+    async get(id) { return readJSON(LOCAL_PREFIX + id); },
+    async put(id, name, data) {
+      const meta = { id, name, updatedAt: Date.now() };
+      if (!writeJSON(LOCAL_PREFIX + id, { ...meta, data })) throw new Error('storage full');
+      writeJSON(LOCAL_INDEX, [meta, ...(readJSON(LOCAL_INDEX) || []).filter((b) => b.id !== id)]);
+      return meta;
+    },
+    async del(id) {
+      try { localStorage.removeItem(LOCAL_PREFIX + id); } catch { /* ignore */ }
+      writeJSON(LOCAL_INDEX, (readJSON(LOCAL_INDEX) || []).filter((b) => b.id !== id));
+    },
+  };
+
+  // Shared storage on Netlify (netlify/functions/boards.mjs).
+  async function api(path, opts = {}) {
+    const r = await fetch(path, { ...opts, headers: { accept: 'application/json', ...(opts.body ? { 'content-type': 'application/json' } : {}) } });
+    if (r.status === 401) { location.reload(); throw new Error('signed out'); }
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+  const remoteStore = {
+    shared: true,
+    list: () => api('/api/boards'),
+    get: (id) => api(`/api/boards/${id}`).catch((e) => (String(e.message).includes('404') ? null : Promise.reject(e))),
+    put: (id, name, data, keepalive = false) =>
+      api(`/api/boards/${id}`, { method: 'PUT', body: JSON.stringify({ name, data }), keepalive }),
+    del: (id) => api(`/api/boards/${id}`, { method: 'DELETE' }),
+  };
+
+  let store = localStore;
+  let boards = [];
+  let currentId = null;
+  let currentName = '';
+  let dirty = false;
+  let saving = null;
+  let saveTimer = null;
+  let renamingId = null;
+
+  function setStatus(text, isError = false) {
+    const el = $('saveStatus');
+    el.textContent = text;
+    el.classList.toggle('error', isError);
+  }
+
+  function scheduleSave() {
+    if (!currentId) return;
+    dirty = true;
+    setStatus('Saving…');
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveNow, SAVE_DELAY);
+  }
+
+  async function saveNow(keepalive = false) {
+    clearTimeout(saveTimer);
+    if (saving) { await saving; }
+    if (!dirty || !currentId) return;
+    dirty = false;
+    const id = currentId, name = currentName, data = JSON.parse(JSON.stringify(state));
+    saving = (async () => {
+      try {
+        const meta = await store.put(id, name, data, keepalive);
+        const b = boards.find((x) => x.id === id);
+        if (b) b.updatedAt = meta.updatedAt;
+        if (!dirty) setStatus(store.shared ? 'Saved' : 'Saved in this browser');
+      } catch {
+        dirty = true;
+        setStatus('Not saved – retrying…', true);
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(saveNow, 4000);
+      } finally {
+        saving = null;
+      }
+    })();
+    return saving;
+  }
+
+  window.addEventListener('beforeunload', (e) => {
+    if (!dirty) return;
+    saveNow(true);
+    e.preventDefault();
+    e.returnValue = '';
+  });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && dirty) saveNow(true); });
+
+  // ---------- Boards: actions ----------
+  async function openBoard(id) {
+    if (editingId) finishEdit();
+    await saveNow();
+    let b = null;
+    try { b = await store.get(id); } catch { setStatus('Could not open board', true); return; }
+    if (!b) { await refreshBoards(); if (boards[0] && boards[0].id !== id) return openBoard(boards[0].id); return createBoard('Untitled board'); }
+    currentId = b.id;
+    currentName = b.name;
+    state = valid(b.data) ? normalise(b.data) : blank();
+    history = [JSON.stringify(state)];
+    hIndex = 0;
+    selected = null;
+    dirty = false;
+    try { localStorage.setItem(LAST_KEY, id); } catch { /* ignore */ }
+    if (!boards.some((x) => x.id === id)) boards.unshift({ id, name: b.name, updatedAt: b.updatedAt });
+    setStatus(store.shared ? 'Saved' : 'Saved in this browser');
+    render();
+    renderBoards();
+    centreView();
+  }
+
+  async function createBoard(name, data = blank()) {
+    await saveNow();
+    const id = boardId();
+    try {
+      const meta = await store.put(id, name, data);
+      boards.unshift({ id, name: meta.name, updatedAt: meta.updatedAt });
+    } catch {
+      setStatus('Could not create board', true);
+      return null;
+    }
+    await openBoard(id);
+    return id;
+  }
+
+  async function renameBoard(id, name) {
+    name = name.trim().slice(0, 80);
+    const b = boards.find((x) => x.id === id);
+    if (!b || !name || name === b.name) return renderBoards();
+    b.name = name;
+    if (id === currentId) {
+      currentName = name;
+      dirty = true;
+      await saveNow();
+    } else {
+      try {
+        const full = await store.get(id);
+        if (full) await store.put(id, name, full.data);
+      } catch { setStatus('Could not rename board', true); }
+    }
+    render();
+    renderBoards();
+  }
+
+  async function deleteBoard(id) {
+    const b = boards.find((x) => x.id === id);
+    if (!b || !confirm(`Delete "${b.name}"? This can't be undone.`)) return;
+    try { await store.del(id); } catch { setStatus('Could not delete board', true); return; }
+    boards = boards.filter((x) => x.id !== id);
+    if (id === currentId) {
+      currentId = null;
+      dirty = false;
+      if (boards.length) await openBoard(boards[0].id); else await createBoard('Untitled board');
+    } else {
+      renderBoards();
+    }
+  }
+
+  async function refreshBoards() {
+    try {
+      const list = await store.list();
+      boards = list;
+      const cur = boards.find((x) => x.id === currentId);
+      if (cur) cur.name = currentName;   // local edits win until saved
+      renderBoards();
+    } catch { /* keep the list we have */ }
+  }
+
+  // ---------- Boards: menu ----------
+  function renderBoards() {
+    const list = $('boardList');
+    list.innerHTML = boards.map((b) => {
+      const active = b.id === currentId ? ' active' : '';
+      if (b.id === renamingId) {
+        return `<li class="board-item${active}"><input class="board-rename" data-rename="${b.id}" value="${esc(b.name)}" maxlength="80" aria-label="Board name"></li>`;
+      }
+      return `<li class="board-item${active}">` +
+        `<button class="board-open" data-open="${b.id}" title="${esc(b.name)}">${esc(b.name)}</button>` +
+        `<button class="board-act" data-edit="${b.id}" title="Rename" aria-label="Rename ${esc(b.name)}">✎</button>` +
+        `<button class="board-act" data-del="${b.id}" title="Delete" aria-label="Delete ${esc(b.name)}">✕</button></li>`;
+    }).join('');
+    const sel = $('boardSelect');
+    sel.innerHTML = boards.map((b) => `<option value="${b.id}"${b.id === currentId ? ' selected' : ''}>${esc(b.name)}</option>`).join('') +
+      '<option value="__new">+ New board</option>';
+    $('boardTitle').textContent = currentName;
+    $('boardTitle').title = currentName;
+    document.title = currentName ? `${currentName} – User Journey Builder` : 'Made Clear Studios – User Journey Builder';
+    const input = list.querySelector('[data-rename]');
+    if (input) { input.focus(); input.select(); }
+  }
+
+  $('boardList').addEventListener('click', (e) => {
+    const open = e.target.closest('[data-open]'), edit = e.target.closest('[data-edit]'), del = e.target.closest('[data-del]');
+    if (open && open.dataset.open !== currentId) openBoard(open.dataset.open);
+    if (edit) { renamingId = edit.dataset.edit; renderBoards(); }
+    if (del) deleteBoard(del.dataset.del);
+  });
+  $('boardList').addEventListener('dblclick', (e) => {
+    const open = e.target.closest('[data-open]');
+    if (open) { renamingId = open.dataset.open; renderBoards(); }
+  });
+  $('boardList').addEventListener('keydown', (e) => {
+    const input = e.target.closest('[data-rename]');
+    if (!input) return;
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { input.value = boards.find((b) => b.id === input.dataset.rename)?.name || ''; input.blur(); }
+  });
+  $('boardList').addEventListener('focusout', (e) => {
+    const input = e.target.closest('[data-rename]');
+    if (!input) return;
+    renamingId = null;
+    renameBoard(input.dataset.rename, input.value);
+  });
+  $('newBoard').onclick = async () => {
+    const id = await createBoard('Untitled board');
+    if (id) { renamingId = id; renderBoards(); }
+  };
+  $('boardSelect').onchange = async (e) => {
+    const v = e.target.value;
+    if (v === '__new') {
+      const name = prompt('Name for the new board', 'Untitled board');
+      if (name && name.trim()) await createBoard(name.trim().slice(0, 80)); else renderBoards();
+    } else if (v !== currentId) {
+      openBoard(v);
+    }
+  };
+  window.addEventListener('focus', () => { if (store.shared) refreshBoards(); });
+
+  // ---------- Start ----------
+  async function init() {
+    render();
+    setStatus('Loading…');
+    if (location.protocol !== 'file:') {
+      try {
+        boards = await remoteStore.list();
+        store = remoteStore;
+        $('logout').hidden = false;
+      } catch { /* no API: fall back to this browser */ }
+    }
+    if (store === localStore) boards = await localStore.list();
+
+    if (!boards.length) {
+      const legacy = readJSON(LEGACY_KEY);
+      const data = valid(legacy) ? normalise(legacy) : blank();
+      await createBoard(data.shapes.length ? 'My first board' : 'Untitled board', data);
+      return;
+    }
+    let last = null;
+    try { last = localStorage.getItem(LAST_KEY); } catch { /* ignore */ }
+    await openBoard(boards.some((b) => b.id === last) ? last : boards[0].id);
+  }
+
+  init();
 })();

@@ -1,0 +1,9 @@
+{
+  "name": "mcs-user-journey-builder",
+  "private": true,
+  "type": "module",
+  "description": "Made Clear Studios - User Journey Builder",
+  "dependencies": {
+    "@netlify/blobs": "^11.1.11"
+  }
+}

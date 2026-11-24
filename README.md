@@ -1,25 +1,34 @@
-# Whiteboard
+# Made Clear Studios – User Journey Builder
 
-A small, dependency-free Miro-style whiteboard. Plain HTML, CSS and JavaScript with no build step.
+A lightweight, password-protected board for mapping user journeys. It's plain HTML, CSS and JavaScript, hosted on Netlify. It has no build step and no front-end dependencies.
 
 ## Features
-- Four shapes: square, rectangle, circle and triangle. Each has a 2px black stroke.
-- Eight fill colours. Pick one before adding a shape, or select a shape and click a colour to recolour it.
-- Drag shapes from the palette onto the canvas, or click a shape to drop it in the middle of the view.
-- Drag the corner handles to resize. Squares and circles keep their proportions.
+- Four shapes: square, rectangle, circle and triangle. Each has a 2px black stroke and one of eight fill colours.
+- Drag shapes from the palette onto the board, or click a shape to drop it in the middle of the view.
+- Shapes snap to the edges and centres of nearby shapes, with pink guide lines, and to the dot grid. This applies when adding, moving and resizing. Hold **Alt** to place a shape freely.
+- Resize from the corners. Squares and circles keep their proportions.
 - Double-click a shape, or select it and start typing, to add text.
-- Drag one of the blue dots around a selected shape onto another shape to connect them with an arrow. The arrow follows the shapes when you move them.
-- **Canvas ×2** doubles the canvas in every direction, from 3,000 × 2,000 up to 192,000 × 128,000.
-- Zoom with Ctrl/⌘ + scroll or the toolbar buttons. Drag the background to pan.
-- Undo and redo, an autosave in the browser (localStorage), and JSON export and import.
+- Drag a blue dot from a selected shape onto another shape to connect them with an arrow.
+- **Canvas ×2** doubles the board in every direction, up to 192,000 × 128,000.
+- **Boards menu** on the left: create, open, rename (✎ or double-click) and delete boards.
+- Boards autosave to Netlify Blobs, so everyone with the password sees the same boards.
+- Undo and redo, and JSON export and import. An imported file becomes a new board.
 
-## Run locally
-Open `index.html` in a browser, or serve the folder:
+## Password
+The whole site, including the API, sits behind a password gate. The gate is a Netlify Edge Function: `netlify/edge-functions/auth.js`.
 
-    npx serve .
+**The password is not stored in this repository.** Set it in Netlify:
 
-## Deploy on Netlify
-1. Push this folder to a GitHub repository.
-2. In Netlify, go to **Add new site → Import an existing project → GitHub** and pick the repository.
-3. Leave the build command empty and set the publish directory to `.`. `netlify.toml` already sets both.
-4. Deploy. Every push to the main branch redeploys the site automatically.
+1. Go to **Site configuration → Environment variables → Add a variable**.
+2. Set the key to `SITE_PASSWORD` and the value to the password.
+3. Go to **Deploys → Trigger deploy → Deploy site**. The gate reads the new value after a redeploy.
+
+If `SITE_PASSWORD` isn't set, the site stays locked. Changing it signs everyone out. Sign-ins last 30 days. To sign out, use **Log out** in the top bar.
+
+## Storage
+Boards are saved through `netlify/functions/boards.mjs` into a Netlify Blobs store called `boards`. Saves are last-write-wins: if two people edit the same board at once, the most recent save overwrites the earlier one.
+
+If you open `public/index.html` straight from disk, where there's no API, boards are saved only in that browser's localStorage.
+
+## Deploy
+Netlify deploys automatically from `main`. `netlify.toml` publishes the `public/` folder. Netlify installs `@netlify/blobs` from `package.json` for the boards function.
