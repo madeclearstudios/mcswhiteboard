@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Whiteboard</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Whiteboard</div>
+    <div class="group">
+      <button id="undo" title="Undo (Ctrl+Z)">↶</button>
+      <button id="redo" title="Redo (Ctrl+Shift+Z)">↷</button>
+    </div>
+    <div class="group">
+      <button id="zoomOut" title="Zoom out">−</button>
+      <button id="zoomLabel" title="Reset to 100%">100%</button>
+      <button id="zoomIn" title="Zoom in">+</button>
+      <button id="fit" title="Fit whole canvas">Fit</button>
+    </div>
+    <div class="group">
+      <button id="expand" title="Double the canvas in every direction">Canvas ×2</button>
+      <span id="sizeLabel" class="muted"></span>
+    </div>
+    <div class="group right">
+      <button id="export" title="Download board as JSON">Export</button>
+      <button id="import" title="Load a board JSON file">Import</button>
+      <button id="clear" title="Clear the board">Clear</button>
+      <input id="file" type="file" accept="application/json,.json" hidden>
+    </div>
+  </header>
+
+  <aside class="palette" id="palette">
+    <section>
+      <h2>Shapes</h2>
+      <p class="hint">Drag onto the board, or click to add.</p>
+      <div class="shapes">
+        <button class="tool" data-new="square" title="Square">
+          <svg viewBox="0 0 48 48"><rect x="6" y="6" width="36" height="36"/></svg><span>Square</span>
+        </button>
+        <button class="tool" data-new="rectangle" title="Rectangle">
+          <svg viewBox="0 0 48 48"><rect x="3" y="12" width="42" height="24"/></svg><span>Rectangle</span>
+        </button>
+        <button class="tool" data-new="circle" title="Circle">
+          <svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="18"/></svg><span>Circle</span>
+        </button>
+        <button class="tool" data-new="triangle" title="Triangle">
+          <svg viewBox="0 0 48 48"><polygon points="24,6 43,41 5,41"/></svg><span>Triangle</span>
+        </button>
+      </div>
+    </section>
+    <section>
+      <h2>Colour</h2>
+      <div class="swatches" id="swatches"></div>
+    </section>
+    <section class="help">
+      <h2>Tips</h2>
+      <ul>
+        <li>Double-click or start typing to add text</li>
+        <li>Drag a blue dot onto another shape to connect</li>
+        <li>Drag the corners to resize</li>
+        <li>Drag the background to pan</li>
+        <li>Ctrl/⌘ + scroll to zoom</li>
+        <li>Delete removes the selection</li>
+      </ul>
+    </section>
+  </aside>
+
+  <main class="scroller" id="scroller">
+    <div class="stage" id="stage">
+      <svg id="board" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+            <circle cx="12" cy="12" r="1.2" fill="#c9ccd4"/>
+          </pattern>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="#111"/>
+          </marker>
+          <marker id="arrowSel" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/>
+          </marker>
+        </defs>
+        <rect id="bg" x="0" y="0" fill="url(#grid)"/>
+        <g id="conns"></g>
+        <g id="shapes"></g>
+        <g id="ui"></g>
+      </svg>
+      <textarea id="editor" spellcheck="false" hidden></textarea>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
